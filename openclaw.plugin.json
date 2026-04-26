@@ -1,5 +1,5 @@
 {
-  "id": "zulip",
+  "id": "kagura-zulip",
   "channels": ["zulip"],
   "channelEnvVars": {
     "zulip": ["ZULIP_REALM", "ZULIP_EMAIL", "ZULIP_API_KEY"]
