@@ -74,12 +74,9 @@ In any Zulip topic, send `/meta` commands to manage topic metadata:
 ```bash
 npm install
 npm test          # vitest (74 tests)
+npm run test:node # node:test metadata suite (61 tests)
+npm run test:all  # both suites (135 tests total)
 npm run typecheck # tsc --noEmit
-```
-
-Additional node:test suite (61 tests):
-```bash
-node --test src/metadata/command-handler.test.ts src/metadata/command-parser.test.ts src/metadata/store.test.ts
 ```
 
 ## License

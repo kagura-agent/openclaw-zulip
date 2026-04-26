@@ -20,6 +20,8 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:node": "node --import tsx --test src/metadata/command-handler.test.ts src/metadata/command-parser.test.ts src/metadata/store.test.ts",
+    "test:all": "npm test && npm run test:node",
     "typecheck": "tsc --noEmit"
   },
   "openclaw": {
