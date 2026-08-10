@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
-export const ZulipConfigSchema = z
+const ZulipConfigSchema = z
   .object({
     realm: z.string().optional(),
     email: z.string().optional(),
@@ -16,4 +16,9 @@ export const ZulipConfigSchema = z
   })
   .strict();
 
-export const ZulipChannelConfigSchema: ReturnType<typeof buildChannelConfigSchema> = buildChannelConfigSchema(ZulipConfigSchema);
+export const ZulipChannelConfigSchema: ReturnType<typeof buildChannelConfigSchema> =
+  buildChannelConfigSchema(
+    // plugin-sdk/zod and channel-config-schema ship separate structurally
+    // identical zod type chunks in the openclaw dist; bridge them explicitly.
+    ZulipConfigSchema as unknown as Parameters<typeof buildChannelConfigSchema>[0],
+  );

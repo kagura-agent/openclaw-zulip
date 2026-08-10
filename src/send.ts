@@ -5,12 +5,11 @@
 import { ZulipClient } from "./client.js";
 import { DEFAULT_TOPIC } from "./constants.js";
 import { normalizeZulipMessagingTarget, parseStreamTopic } from "./normalize.js";
-import { getZulipRuntime } from "./runtime.js";
-import type { ZulipClientConfig } from "./types.js";
+import type { CoreConfig, ZulipClientConfig } from "./types.js";
 
 export type SendZulipOptions = {
   accountId?: string;
-  replyTo?: string;
+  cfg?: CoreConfig;
   client?: ZulipClient;
   clientConfig?: ZulipClientConfig;
 };
@@ -35,13 +34,15 @@ function resolveClient(opts: SendZulipOptions): ZulipClient {
   if (opts.clientConfig) {
     return new ZulipClient(opts.clientConfig);
   }
-  // Fallback: try runtime
-  const runtime = getZulipRuntime();
-  const client = (runtime as Record<string, unknown>).client;
-  if (client instanceof ZulipClient) {
-    return client;
+  const zulipCfg = opts.cfg?.channels?.zulip;
+  if (zulipCfg?.realm && zulipCfg.email && zulipCfg.apiKey) {
+    return new ZulipClient({
+      realm: zulipCfg.realm,
+      email: zulipCfg.email,
+      apiKey: zulipCfg.apiKey,
+    });
   }
-  throw new Error("No ZulipClient available — provide client or clientConfig");
+  throw new Error("No ZulipClient available — provide client, clientConfig, or configured cfg");
 }
 
 /**
