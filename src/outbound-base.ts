@@ -1,4 +1,4 @@
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 
 export const zulipOutboundBaseAdapter = {
   deliveryMode: "direct" as const,

@@ -13,9 +13,11 @@ import {
   handleMetaCommand,
   syncPrefixToMetadata,
 } from "./metadata/index.js";
-import { normalizeZulipMessagingTarget } from "./normalize.js";
+import { zulipMessageAdapter } from "./message-adapter.js";
+import { formatStreamTopic, normalizeZulipMessagingTarget } from "./normalize.js";
 import { zulipOutboundBaseAdapter } from "./outbound-base.js";
 import { secretTargetRegistryEntries, collectRuntimeConfigAssignments } from "./secret-contract.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { sendMessageZulip } from "./send.js";
 import type { CoreConfig, ZulipProbe } from "./types.js";
 
@@ -87,6 +89,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
       messaging: {
         normalizeTarget: normalizeZulipMessagingTarget,
       },
+      message: zulipMessageAdapter,
       gateway: {
         startAccount: async (ctx) => {
           const cfg = ctx.cfg as CoreConfig;
@@ -134,7 +137,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
                       stripped,
                     );
                     const target = buildInboundTarget(msg, accountId);
-                    await sendMessageZulip(target, response, { accountId });
+                    await sendMessageZulip(target, response, { cfg, accountId });
                   }
                   return;
                 }
@@ -142,12 +145,21 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
                 const target = buildInboundTarget(msg, accountId);
                 ctx.log?.info?.(`zulip: inbound from ${msg.senderEmail} → ${target}`);
 
-
-                // Dispatch to AI via channelRuntime if available.
-                // Uses finalizeInboundContext → dispatchReplyWithBufferedBlockDispatcher
-                // pattern (see qqbot/discord adapters for reference).
-                if (ctx.channelRuntime) {
-                  const runtime = ctx.channelRuntime as unknown as { reply: { finalizeInboundContext: (p: Record<string, unknown>) => unknown; dispatchReplyWithBufferedBlockDispatcher: (p: Record<string, unknown>) => Promise<void> } };
+                // Dispatch to AI through the routed channel-turn seam. Core owns
+                // session recording; final replies deliver durably through the
+                // zulip message adapter (deliverInboundReplyWithMessageSendContext).
+                const runtime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+                if (runtime) {
+                  const peerId =
+                    msg.isGroup && msg.stream
+                      ? formatStreamTopic(msg.stream, msg.topic)
+                      : String(msg.senderId);
+                  const route = runtime.routing.resolveAgentRoute({
+                    cfg: ctx.cfg,
+                    channel: "zulip",
+                    accountId,
+                    peer: { kind: msg.isGroup ? "group" : "direct", id: peerId },
+                  });
                   const ctxPayload = runtime.reply.finalizeInboundContext({
                     Body: msg.text,
                     BodyForAgent: msg.text,
@@ -155,7 +167,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
                     CommandBody: msg.text,
                     From: msg.senderEmail,
                     To: `zulip:${accountId}`,
-                    SessionKey: target,
+                    SessionKey: route.sessionKey,
                     AccountId: accountId,
                     ChatType: msg.isGroup ? "group" : "direct",
                     SenderId: String(msg.senderId),
@@ -169,15 +181,30 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
                     CommandAuthorized: false,
                   });
 
-                  await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
-                    ctx: ctxPayload,
+                  await runtime.inbound.dispatch({
                     cfg: ctx.cfg,
-                    dispatcherOptions: {
-                      deliver: async (payload: { text?: string }) => {
+                    channel: "zulip",
+                    accountId,
+                    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+                    ctxPayload,
+                    delivery: {
+                      // Durable final delivery resolves the target from OriginatingTo
+                      // and falls back to `deliver` when it reports unsupported.
+                      durable: {},
+                      deliver: async (payload) => {
                         const text = payload.text?.trim();
                         if (text) {
-                          await sendMessageZulip(target, text, { accountId });
+                          await sendMessageZulip(target, text, { cfg, accountId });
                         }
+                      },
+                      onError: (err, info) => {
+                        ctx.log?.info?.(`zulip: ${info.kind} reply failed: ${String(err)}`);
+                      },
+                    },
+                    replyPipeline: {},
+                    record: {
+                      onRecordError: (err) => {
+                        ctx.log?.info?.(`zulip: failed updating session meta: ${String(err)}`);
                       },
                     },
                   });
@@ -212,29 +239,10 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount, ZulipProbe> = crea
       base: zulipOutboundBaseAdapter,
       attachedResults: {
         channel: "zulip",
-        sendText: async ({ to, text, accountId, replyToId }) => {
-          const result = await sendMessageZulip(to, text, {
-            accountId: accountId ?? undefined,
-            replyTo: replyToId ?? undefined,
-          });
-          return { messageId: String(result.messageId), target: result.target };
-        },
-        sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
-          if (mediaUrl) {
-            // For URLs we don't have blob data, send as a text message with link
-            const message = text ? `${text}\n${mediaUrl}` : mediaUrl;
-            const r1 = await sendMessageZulip(to, message, {
-              accountId: accountId ?? undefined,
-              replyTo: replyToId ?? undefined,
-            });
-            return { messageId: String(r1.messageId), target: r1.target };
-          }
-          const r2 = await sendMessageZulip(to, text, {
-            accountId: accountId ?? undefined,
-            replyTo: replyToId ?? undefined,
-          });
-          return { messageId: String(r2.messageId), target: r2.target };
-        },
+        sendText: ({ onDeliveryResult: _onDeliveryResult, ...sendCtx }) =>
+          zulipMessageAdapter.send.text(sendCtx),
+        sendMedia: ({ onDeliveryResult: _onDeliveryResult, mediaUrl, ...sendCtx }) =>
+          zulipMessageAdapter.send.media({ ...sendCtx, mediaUrl: mediaUrl ?? "" }),
       },
     },
   },
